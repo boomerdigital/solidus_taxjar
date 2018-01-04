@@ -44,13 +44,25 @@ A sales tax extension for Solidus using [SmartCalcs by TaxJar](https://developer
 ## Developing / Debugging Extension
 
 - Ensure `Spree::Config[:taxjar_enabled]` is set as expected (true/false)
-- Set `Spree::Config[:taxjar_debug_enabled]` as true
-    - It starts logging the interactions in `spec/dummy/log/spree_taxjar.log` if using tests
-    - Check the logs in your Rails application AT `log/spree_taxjar.log` where you have installed the spree_taxjar extension
-    - The same logs are also added to Rails log file like `log/development.log` (works for all environments)
+
+- Look for basic debugging in your standard Rails console that begin with tags [Taxjar]
+
+- For advanced debugging to see the full Taxjar response/request, turn on extra_debugging
+
+SpreeTaxjar.setup do |config|
+  config.extra_debugging = true
+end
+
+(do this in an initializer file at `config/initializers/solidus_taxjar.rb`)
+
+You can also set `swallow_errors` here to false to raise on Taxjar errors (defaults to true).
+
 - As most of the API interactions are recorded and stored in VCR cassettes AT `spec/fixtures/vcr_cassettes`
     - Start with getting familiar with request and response expected
     - Feel free to delete the cassettes to debug your live use-case by setting `Spree::Config[:taxjar_api_key]` as your api_key and inspect results
+
+
+
 
 ## TaxJar API Usage and Billing
 
@@ -63,6 +75,18 @@ TaxJar provides 2 set of API tiers (Standard and Advanced) but shipping in both 
 - For line\_items sales tax, Advanced Tier API call is made to take advantage of in-built product_tax_code and discount fields and all line_items are grouped and sent in same API call
     - Shipping component is ignored as it returns tax for whole order shipping cost and not shipment wise
 - For shipments, standard tier API call is made for each shipment with order amount as ZERO and shipping as shipment cost as we are only interested in shipping charge and not the whole order tax which solves the problem of inaccurate and hackish implementation.
+
+
+## Rescuing from Exceptions 
+Is default but extend further, add this to your `application_controller.rb`
+
+```
+  rescue_from Taxjar::Error do |exception|
+    raise exception if !SpreeTaxjar.swallow_errors
+    flash[:error] = 'Error calculating tax.'
+     # redirect or render here
+  end
+```
 
 ## Testing
 
