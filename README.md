@@ -16,7 +16,7 @@ A sales tax extension for Solidus using [SmartCalcs by TaxJar](https://developer
 1. Add this extension to your Gemfile with this line:
 
   ```ruby
-  gem 'solidus_taxjar'
+  gem 'solidus_taxjar', github: 'boomerdigital/solidus_taxjar', branch: :master
   ```
 
 2. Install the gem using Bundler:
@@ -28,7 +28,7 @@ A sales tax extension for Solidus using [SmartCalcs by TaxJar](https://developer
 3. Copy & run migrations
 
   ```ruby
-  bundle exec rails g soldius_taxjar:install
+  bundle exec rails g solidus_taxjar:install
   ```
 
 4. Restart your server
