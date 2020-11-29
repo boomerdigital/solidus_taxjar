@@ -41,69 +41,77 @@ module Spree
     end
 
     def tax_for_shipment(shipment)
-      order = shipment.order
-      return 0 unless tax_address = order.tax_address
+      return 0 unless shipment.order.tax_address
 
-      rails_cache_key = cache_key(order, shipment, tax_address)
-      logger.debug "[Taxjar] tax_for_shipment: #{shipment.inspect}"
-      Rails.cache.fetch(rails_cache_key, expires_in: CACHE_EXPIRATION_DURATION) do
-        Spree::Taxjar.new(preferred_api_key, order, nil, shipment).calculate_tax_for_shipment
+      tax_for_shipment = cached_tax_for_shipment(shipment)
+
+      unless tax_for_shipment
+        logger.debug "[Taxjar] tax_for_shipment: #{shipment.inspect} => $0 (tax_for_shipment was nil)"
+        return 0
+      end
+
+      tax_for_shipment.amount_to_collect.tap do |amount|
+        logger.debug "[Taxjar] tax_for_shipment: #{shipment.inspect} => $#{amount}"
       end
     end
 
     def tax_for_item(item)
-      order = item.order
-      return 0 unless tax_address = order.tax_address
+      return 0 unless item.order.tax_address
 
-      rails_cache_key = cache_key(order, item, tax_address)
+      tax_for_order = cached_tax_for_order(item.order)
 
-      logger.debug "[Taxjar] tax_for_item order #{item.order.number}: lineitem #{item.id}, $#{item.amount.to_f}, promo: $#{item.promo_total}"
-      if SpreeTaxjar.extra_debugging
-        if (read_key = Rails.cache.read(rails_cache_key))
-          logger.debug "[Taxjar] ... using cached response; cache key is #{rails_cache_key}; value =#{read_key}"
-        else
-          logger.debug "[Taxjar] ... not cached: #{rails_cache_key} "
+      unless tax_for_order
+        logger.debug "[Taxjar] tax_for_item order #{item.order.number}: lineitem #{item.id}, $#{item.amount.to_f}, promo: $#{item.promo_total} => $0 (tax_for_order was nil)"
+        return 0
+      end
+
+      tax_for_order.breakdown.line_items.
+        find { |line_item| line_item.id.to_i == item.id }.
+        tax_collectable.tap do |tax_collectable|
+          logger.debug "[Taxjar] tax_for_item order #{item.order.number}: lineitem #{item.id}, $#{item.amount.to_f}, promo: $#{item.promo_total} => $#{tax_collectable}"
         end
-      end
+    end
 
-      ## Test when caching enabled that only 1 API call is sent for an order
-      ## should avoid N calls for N line_items
-
-      Rails.cache.fetch(rails_cache_key, expires_in: CACHE_EXPIRATION_DURATION) do
-        taxjar_response = Spree::Taxjar.new(preferred_api_key, order, nil, nil).calculate_tax_for_order
-        return 0 unless taxjar_response
-
-        tax_for_current_item = cache_response(taxjar_response, order, tax_address, item)
-        tax_for_current_item
+    def cached_tax_for_order(order)
+      Rails.cache.fetch(order_cache_key(order), expires_in: CACHE_EXPIRATION_DURATION) do
+        Spree::Taxjar.new(preferred_api_key, order, nil, nil).calculate_tax_for_order
       end
     end
 
-    def cache_response(taxjar_response, order, address, item = nil)
-      ## res is set to faciliate testing as to return computed result from API
-      ## for given line_item
-      ## better to use Rails.cache.fetch for order and wrapping lookup based on line_item id
-      res = nil
-      taxjar_response.breakdown.line_items.each do |taxjar_line_item|
-        # the taxjar_line_item is a hash of the API response
-        # the line_item is the Spree::LineItem object
-        line_item = Spree::LineItem.find(taxjar_line_item.id)
-        res = taxjar_line_item.tax_collectable
-
-        this_item_cache_key = cache_key(order, line_item, address)
-        logger.debug "[Taxjar] ... writing to taxjar cache cache_key is #{this_item_cache_key}; amount=#{taxjar_line_item.tax_collectable}"
-        Rails.cache.write(this_item_cache_key, taxjar_line_item.tax_collectable, expires_in: CACHE_EXPIRATION_DURATION)
+    def cached_tax_for_shipment(shipment)
+      Rails.cache.fetch(shipment_cache_key(shipment), expires_in: CACHE_EXPIRATION_DURATION) do
+        Spree::Taxjar.new(preferred_api_key, shipment.order, nil, shipment).calculate_tax_for_shipment
       end
-      res
     end
 
-    def cache_key(order, item, address)
-      if item.is_a?(Spree::LineItem)
-        ['Taxjar-Spree::LineItem', order.id, item.id, address.state_id, address.zipcode, item.amount, item.promo_total, order.promo_total, :amount_to_collect]
-      elsif item.is_a?(Spree::Shipment)
-        ['Taxjar-Spree::Shipment', order.id, item.id, address.state_id, address.zipcode, item.cost, :amount_to_collect]
-      else
-        raise "cache_key passed and #{item} object -- don't know how to process"
-      end
+    def order_cache_key(order)
+      # The cache key must include keys that represents the content of an order:
+      # - list of items and their quantity
+      # - shipping total cost before tax
+      # - customer address
+      # So that if any of these elements changes, we perform a new call to TaxJar.
+      [
+        'Taxjar-Spree::Order',
+        :amount_to_collect,
+        order.id,
+        order.line_items.map(&:variant_id),
+        order.line_items.map(&:quantity),
+        order.shipments.map(&:total_before_tax),
+        order.tax_address.state_id,
+        order.tax_address.zipcode
+      ]
+    end
+
+    def shipment_cache_key(shipment)
+      [
+        'Taxjar-Spree::Shipment',
+        :amount_to_collect,
+        shipment.order.id,
+        shipment.id,
+        shipment.cost,
+        shipment.order.tax_address.state_id,
+        shipment.order.tax_address.zipcode
+      ]
     end
 
     # Imported from Spree::VatPriceCalculation
